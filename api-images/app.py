@@ -1,83 +1,84 @@
-from flask import Flask, request, jsonify, render_template
-import json
-import sqlite3
+from flask import Flask, jsonify, request, abort
+from flask_cors import CORS
+import mysql.connector
 
 app = Flask(__name__)
 
-def db_connection():
-    conn = None
-    try:
-        conn = sqlite3.connect('images.sqlite')
-    except sqlite3.error as e:
-        print(e)
-    return conn
+app.secret_key = "my_secret_key"
 
-@app.route("/images", methods=["GET", "POST"])
-def images():
-    conn = db_connection()
-    cursor = conn.cursor()
+CORS(app, resources={r"/": {"origins": ""}}, supports_credentials=True)
 
-    if request.method == "GET":
-        cursor = conn.execute("SELECT * FROM images")
-        images = [
-            dict(id=row[0], name=row[1], description=row[2], url=row[3])
-            for row in cursor.fetchall()
-        ]
-        if images is not None:
-            return jsonify(images)
+db = mysql.connector.connect(
+    host="database-proyecto.c45ddxrq8nnm.us-east-1.rds.amazonaws.com",
+    user="admin",
+    password="database-proyecto",
+    database="imagenes"
+)
 
-    if request.method == "POST":
-        name = request.form["name"]
-        description = request.form["description"]
-        url = request.form["url"]
+cursor = db.cursor(dictionary=True)
 
-        sql = """INSERT INTO images (name, description, url)
-                 VALUES (?, ?, ?) """
+@app.route("/images", methods=["GET"])
+def get_images():
+    query = "SELECT * FROM images"
+    cursor.execute(query)
+    images = cursor.fetchall()
+    return jsonify(images)
 
-        cursor = cursor.execute(sql, (name, description, url))
-        conn.commit()
-        return f"Image with id: {cursor.lastrowid} created successfully"
+@app.route("/image/<int:id>", methods=["GET"])
+def get_image(id):
+    query = "SELECT * FROM images WHERE id = %s"
+    cursor.execute(query, (id,))
+    image = cursor.fetchone()
+    if image:
+        return jsonify(image)
+    else:
+        return jsonify({"error": "Imagen no encontrada"}), 404
 
-@app.route('/image/<int:id>', methods=["GET", "PUT", "DELETE"])
-def image(id):
-    conn = db_connection()
-    cursor = conn.cursor()
-    image = None
+@app.route("/image", methods=["POST"])
+def create_image():
+    data = request.json
+    if "name" in data and "description" in data and "url" in data:
+        query = "INSERT INTO images (name, description, url) VALUES (%s, %s, %s)"
+        values = (data["name"], data["description"], data["url"])
+        cursor.execute(query, values)
+        db.commit()
+        return jsonify({"message": "Imagen creada exitosamente"}), 201
+    else:
+        return jsonify({"error": "Faltan datos en la solicitud"}), 400
 
-    if request.method == "GET":
-        cursor.execute("SELECT * FROM images WHERE id=?", (id,))
-        rows = cursor.fetchall()
-        for row in rows:
-            image = row
-        if image is not None:
-            return jsonify(dict(id=image[0], name=image[1], description=image[2], url=image[3])), 200
-        else:
-            return "Image not found", 404
+@app.route("/image/<int:id>", methods=["PUT"])
+def update_image(id):
+    data = request.json
+    if "name" in data or "description" in data or "url" in data:
+        updates = []
+        values = []
+        if "name" in data:
+            updates.append("name = %s")
+            values.append(data["name"])
+        if "description" in data:
+            updates.append("description = %s")
+            values.append(data["description"])
+        if "url" in data:
+            updates.append("url = %s")
+            values.append(data["url"])
 
-    if request.method == "PUT":
-        sql = """UPDATE images SET name = ?, description = ?, url = ?
-                 WHERE id = ?"""
+        query = "UPDATE images SET " + ", ".join(updates) + " WHERE id = %s"
+        values.append(id)
+        cursor.execute(query, tuple(values))
+        db.commit()
+        return jsonify({"message": "Imagen actualizada exitosamente"}), 200
+    else:
+        return jsonify({"error": "No se proporcionaron datos para actualizar"}), 400
 
-        name = request.form["name"]
-        description = request.form["description"]
-        url = request.form["url"]
-
-        updated_image = {
-            "id": id,
-            "name": name,
-            "description": description,
-            "url": url
-        }
-
-        conn.execute(sql, (name, description, url, id))
-        conn.commit()
-        return jsonify(updated_image)
-
-    if request.method == "DELETE":
-        sql = """DELETE FROM images WHERE id=?"""
-        conn.execute(sql, (id,))
-        conn.commit()
-        return f"The image with id: {id} has been deleted.", 200
+@app.route("/image/<int:id>", methods=["DELETE"])
+def delete_image(id):
+    query = "DELETE FROM images WHERE id = %s"
+    cursor.execute(query, (id,))
+    db.commit()
+    if cursor.rowcount > 0:
+        return jsonify({"message": "Imagen eliminada exitosamente"}), 200
+    else:
+        return jsonify({"error": "Imagen no encontrada"}), 404
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=False)
+    app.run(port=8000, debug=True)
